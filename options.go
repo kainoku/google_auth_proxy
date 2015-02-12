@@ -26,7 +26,7 @@ type Options struct {
 	GoogleAppsDomains       []string      `flag:"google-apps-domain" cfg:"google_apps_domains"`
 	Upstreams               []string      `flag:"upstream" cfg:"upstreams"`
 	SkipAuthRegex           []string      `flag:"skip-auth-regex" cfg:"skip_auth_regex"`
-
+	TokenCookieSecret       string        `flag:"token-cookie-secret" cfg:"token_cookie_secret" env:"GOOGLE_AUTH_PROXY_TOKEN_COOKIE_SECRET"`
 	// internal values that are set after config validation
 	redirectUrl   *url.URL
 	proxyUrls     []*url.URL
@@ -51,6 +51,11 @@ func (o *Options) Validate() error {
 	if o.CookieSecret == "" {
 		errors.New("missing setting: cookie-secret")
 	}
+
+	if o.TokenCookieSecret == "" {
+		errors.New("missing setting: token-cookie-secret")
+	}
+
 	if o.ClientID == "" {
 		return errors.New("missing setting: client-id")
 	}

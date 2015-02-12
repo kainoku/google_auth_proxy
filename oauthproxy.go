@@ -44,6 +44,9 @@ type OauthProxy struct {
 	PassBasicAuth       bool
 	skipAuthRegex       []string
 	compiledRegex       []*regexp.Regexp
+
+	TokenCookieKey  string
+	TokenCookieSeed string
 }
 
 func NewOauthProxy(opts *Options, validator func(string) bool) *OauthProxy {
@@ -80,7 +83,7 @@ func NewOauthProxy(opts *Options, validator func(string) bool) *OauthProxy {
 
 		clientID:           opts.ClientID,
 		clientSecret:       opts.ClientSecret,
-		oauthScope:         "profile email",
+		oauthScope:         "openid profile email",
 		oauthRedemptionUrl: redeem,
 		oauthLoginUrl:      login,
 		serveMux:           serveMux,
@@ -88,6 +91,9 @@ func NewOauthProxy(opts *Options, validator func(string) bool) *OauthProxy {
 		skipAuthRegex:      opts.SkipAuthRegex,
 		compiledRegex:      opts.CompiledRegex,
 		PassBasicAuth:      opts.PassBasicAuth,
+
+		TokenCookieKey:  "_token",
+		TokenCookieSeed: opts.TokenCookieSecret,
 	}
 }
 
@@ -216,6 +222,29 @@ func (p *OauthProxy) SetCookie(rw http.ResponseWriter, req *http.Request, val st
 		Path:     "/",
 		Domain:   domain,
 		HttpOnly: p.CookieHttpOnly,
+		Secure:   p.CookieHttpsOnly,
+		Expires:  time.Now().Add(p.CookieExpire),
+	}
+	http.SetCookie(rw, cookie)
+}
+
+func (p *OauthProxy) SetTokenCookie(rw http.ResponseWriter, req *http.Request, token string) {
+	domain := strings.Split(req.Host, ":")[0] // strip the port (if any)
+	if p.CookieDomain != "" && strings.HasSuffix(domain, p.CookieDomain) {
+		domain = p.CookieDomain
+	}
+
+	encryptedToken, err := EncryptWithAES(p.TokenCookieSeed, token)
+	if err != nil {
+		encryptedToken = ""
+	}
+
+	cookie := &http.Cookie{
+		Name:     p.TokenCookieKey,
+		Value:    encryptedToken,
+		Path:     "/",
+		Domain:   domain,
+		HttpOnly: true,
 		Secure:   p.CookieHttpsOnly,
 		Expires:  time.Now().Add(p.CookieExpire),
 	}
@@ -357,7 +386,7 @@ func (p *OauthProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		_, email, err := p.redeemCode(req.Form.Get("code"))
+		accessToken, email, err := p.redeemCode(req.Form.Get("code"))
 		if err != nil {
 			log.Printf("%s error redeeming code %s", remoteAddr, err)
 			p.ErrorPage(rw, 500, "Internal Error", err.Error())
@@ -373,6 +402,7 @@ func (p *OauthProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		if p.Validator(email) {
 			log.Printf("%s authenticating %s completed", remoteAddr, email)
 			p.SetCookie(rw, req, email)
+			p.SetTokenCookie(rw, req, accessToken)
 			http.Redirect(rw, req, redirect, 302)
 			return
 		} else {

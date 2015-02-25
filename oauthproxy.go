@@ -105,6 +105,12 @@ func (p *OauthProxy) GetLoginURL(redirectUrl string) string {
 	if strings.HasPrefix(redirectUrl, "/") {
 		params.Add("state", redirectUrl)
 	}
+
+	redirectUrlObj, _ := url.Parse(redirectUrl)
+	if redirectUrlObj.Host == p.redirectUrl.Host {
+		params.Add("state", redirectUrl)
+	}
+
 	return fmt.Sprintf("%s?%s", p.oauthLoginUrl, params.Encode())
 }
 

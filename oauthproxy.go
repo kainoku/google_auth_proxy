@@ -45,8 +45,7 @@ type OauthProxy struct {
 	skipAuthRegex       []string
 	compiledRegex       []*regexp.Regexp
 
-	TokenCookieKey  string
-	TokenCookieSeed string
+	EncryptedCookieSeed string
 }
 
 func NewOauthProxy(opts *Options, validator func(string) bool) *OauthProxy {
@@ -92,8 +91,7 @@ func NewOauthProxy(opts *Options, validator func(string) bool) *OauthProxy {
 		compiledRegex:      opts.CompiledRegex,
 		PassBasicAuth:      opts.PassBasicAuth,
 
-		TokenCookieKey:  "_token",
-		TokenCookieSeed: opts.TokenCookieSecret,
+		EncryptedCookieSeed: opts.EncryptedCookieSecret,
 	}
 }
 
@@ -136,9 +134,11 @@ func (p *OauthProxy) displayCustomLoginForm() bool {
 	return p.HtpasswdFile != nil && p.DisplayHtpasswdForm
 }
 
-func (p *OauthProxy) redeemCode(code string) (string, string, error) {
+func (p *OauthProxy) redeemCode(code string) (map[string]string, error) {
+	output := make(map[string]string)
+
 	if code == "" {
-		return "", "", errors.New("missing code")
+		return output, errors.New("missing code")
 	}
 	params := url.Values{}
 	params.Add("redirect_uri", p.redirectUrl.String())
@@ -149,22 +149,18 @@ func (p *OauthProxy) redeemCode(code string) (string, string, error) {
 	req, err := http.NewRequest("POST", p.oauthRedemptionUrl.String(), bytes.NewBufferString(params.Encode()))
 	if err != nil {
 		log.Printf("failed building request %s", err.Error())
-		return "", "", err
+		return output, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	json, err := apiRequest(req)
 	if err != nil {
 		log.Printf("failed making request %s", err)
-		return "", "", err
-	}
-	access_token, err := json.Get("access_token").String()
-	if err != nil {
-		return "", "", err
+		return output, err
 	}
 
 	idToken, err := json.Get("id_token").String()
 	if err != nil {
-		return "", "", err
+		return output, err
 	}
 
 	// id_token is a base64 encode ID token payload
@@ -172,18 +168,36 @@ func (p *OauthProxy) redeemCode(code string) (string, string, error) {
 	jwt := strings.Split(idToken, ".")
 	b, err := jwtDecodeSegment(jwt[1])
 	if err != nil {
-		return "", "", err
+		return output, err
 	}
 	data, err := simplejson.NewJson(b)
+	log.Println("data", data)
 	if err != nil {
-		return "", "", err
-	}
-	email, err := data.Get("email").String()
-	if err != nil {
-		return "", "", err
+		return output, err
 	}
 
-	return access_token, email, nil
+	access_token, err := json.Get("access_token").String()
+	if err != nil {
+		return output, err
+	}
+
+	email, err := data.Get("email").String()
+	if err != nil {
+		return output, err
+	}
+
+	sub, err := data.Get("sub").String()
+	if err != nil {
+		return output, err
+	}
+
+	output["email"] = email
+	output["access_token"] = access_token
+	output["sub"] = sub
+
+	log.Println("output", output)
+
+	return output, nil
 }
 
 func jwtDecodeSegment(seg string) ([]byte, error) {
@@ -228,20 +242,20 @@ func (p *OauthProxy) SetCookie(rw http.ResponseWriter, req *http.Request, val st
 	http.SetCookie(rw, cookie)
 }
 
-func (p *OauthProxy) SetTokenCookie(rw http.ResponseWriter, req *http.Request, token string) {
+func (p *OauthProxy) SetEncryptedCookie(rw http.ResponseWriter, req *http.Request, name string, value string) {
 	domain := strings.Split(req.Host, ":")[0] // strip the port (if any)
 	if p.CookieDomain != "" && strings.HasSuffix(domain, p.CookieDomain) {
 		domain = p.CookieDomain
 	}
 
-	encryptedToken, err := EncryptWithAES(p.TokenCookieSeed, token)
+	encryptedValue, err := EncryptWithAES(p.EncryptedCookieSeed, value)
 	if err != nil {
-		encryptedToken = ""
+		encryptedValue = ""
 	}
 
 	cookie := &http.Cookie{
-		Name:     p.TokenCookieKey,
-		Value:    encryptedToken,
+		Name:     name,
+		Value:    encryptedValue,
 		Path:     "/",
 		Domain:   domain,
 		HttpOnly: true,
@@ -386,7 +400,15 @@ func (p *OauthProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		accessToken, email, err := p.redeemCode(req.Form.Get("code"))
+		output, err := p.redeemCode(req.Form.Get("code"))
+		email := output["email"]
+		access_token := output["access_token"]
+		sub := output["sub"]
+
+		log.Printf("email is [%s]\n", email)
+		log.Printf("access_token is [%s]\n", access_token)
+		log.Printf("sub is [%s]\n", sub)
+
 		if err != nil {
 			log.Printf("%s error redeeming code %s", remoteAddr, err)
 			p.ErrorPage(rw, 500, "Internal Error", err.Error())
@@ -402,7 +424,8 @@ func (p *OauthProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		if p.Validator(email) {
 			log.Printf("%s authenticating %s completed", remoteAddr, email)
 			p.SetCookie(rw, req, email)
-			p.SetTokenCookie(rw, req, accessToken)
+			p.SetEncryptedCookie(rw, req, "_sub", sub)
+			p.SetEncryptedCookie(rw, req, "_token", access_token)
 			http.Redirect(rw, req, redirect, 302)
 			return
 		} else {

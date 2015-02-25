@@ -38,7 +38,7 @@ func main() {
 	flagSet.Bool("display-htpasswd-form", true, "display username / password login form if an htpasswd file is provided")
 
 	flagSet.String("cookie-secret", "", "the seed string for secure cookies")
-	flagSet.String("token-cookie-secret", "", "the seed string for token cookies. it is must be 16, 24, or 32 bytes.")
+	flagSet.String("encrypted-cookie-secret", "", "the seed string for encrypted cookies. it is must be 16, 24, or 32 bytes.")
 	flagSet.String("cookie-domain", "", "an optional cookie domain to force cookies to (ie: .yourcompany.com)*")
 	flagSet.Duration("cookie-expire", time.Duration(168)*time.Hour, "expire timeframe for cookie")
 	flagSet.Bool("cookie-https-only", true, "set HTTPS only cookie")
